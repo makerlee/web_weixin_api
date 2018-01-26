@@ -9,6 +9,7 @@ import requests
 import xml.dom.minidom
 import json
 import time
+import datetime
 import ssl
 import re
 import sys
@@ -28,7 +29,6 @@ from socket import timeout as timeout_error
 # for media upload
 import mimetypes
 # from requests_toolbelt.multipart.encoder import MultipartEncoder
-
 
 def catchKeyboardInterrupt(fn):
     def wrapper(*args):
@@ -720,8 +720,8 @@ class WebWeixin(object):
                 '&lt;', '<').replace('&gt;', '>')
             message_id = msg['raw_msg']['MsgId']
 
+            # 地理位置消息
             if content.find('http://weixin.qq.com/cgi-bin/redirectforward?args=') != -1:
-                # 地理位置消息
                 data = self._get(content)
                 if data == '':
                     return
@@ -740,8 +740,8 @@ class WebWeixin(object):
                 content = '%s 发送了一个 位置消息 - 我在 [%s](%s) @ %s]' % (
                     srcName, pos, url, loc)
 
+            # 文件传输助手
             if msg['raw_msg']['ToUserName'] == 'filehelper':
-                # 文件传输助手
                 dstName = '文件传输助手'
 
             if msg['raw_msg']['FromUserName'][:2] == '@@':
@@ -767,7 +767,7 @@ class WebWeixin(object):
             if 'message' in list(msg.keys()):
                 content = msg['message']
 
-        if groupName != None:
+        if groupName is not None:
             print('%s |%s| %s -> %s: %s' % (message_id, groupName.strip(), srcName.strip(), dstName.strip(), content.replace('<br/>', '\n')))
             logging.info('%s |%s| %s -> %s: %s' % (message_id, groupName.strip(),
                                                    srcName.strip(), dstName.strip(), content.replace('<br/>', '\n')))
@@ -776,10 +776,29 @@ class WebWeixin(object):
             logging.info('%s %s -> %s: %s' % (message_id, srcName.strip(),
                                               dstName.strip(), content.replace('<br/>', '\n')))
 
+        # jiyang.li add mysql 存储文字消息
+        from wxbot_demo_py3.save_message import MysqlDao
+        dao = MysqlDao()
+        dao.openConn()
+        cursor = dao.conn.cursor()
+
+        msg = content.replace('<br/>', '\n')  # 正则去除无用符号
+
+        sql = 'INSERT INTO wx_message (sender, groupName, message, receive_time) VALUES (%s, %s, %s, %s)'
+        if groupName is None:
+            cursor.execute(sql, (srcName.strip(), '', msg, datetime.datetime.now()))
+        else:
+            cursor.execute(sql, (srcName.strip(), groupName.strip(), msg, datetime.datetime.now()))
+
+        dao.conn.commit()
+        cursor.close()
+        dao.closeConn()
+
+
     def handleMsg(self, r):
         for msg in r['AddMsgList']:
             print('[*] 你有新的消息，请注意查收')
-            logging.debug('[*] 你有新的消息，请注意查收')
+            # logging.debug('[*] 你有新的消息，请注意查收')
 
             if self.DEBUG:
                 fn = 'msg' + str(int(random.random() * 1000)) + '.json'

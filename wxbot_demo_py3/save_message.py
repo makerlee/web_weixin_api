@@ -10,6 +10,8 @@ jiyang.li create at 2018-01-25
     图片视频的聊天记录保存到硬盘(后期会保存到文件服务器)
 
 """
+
+
 class MysqlDao(object):
     def __init__(self):
         self.host = 'localhost'
@@ -20,10 +22,11 @@ class MysqlDao(object):
         self.conn = None
 
     def openConn(self):
-        self.conn = pymysql.connect(host="localhost", user="root", password="1234", db="vdr", port=3306)
+        self.conn = pymysql.connect(host="localhost", user="root", password="root", db="test", port=3306, charset="utf8")
 
     def closeConn(self):
         self.conn.close()
+
 
 dao = MysqlDao()
 dao.openConn()
