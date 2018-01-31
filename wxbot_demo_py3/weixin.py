@@ -29,6 +29,7 @@ from socket import timeout as timeout_error
 # for media upload
 import mimetypes
 # from requests_toolbelt.multipart.encoder import MultipartEncoder
+from requests_toolbelt import *
 from wxbot_demo_py3.save_message import MysqlDao
 
 
@@ -414,7 +415,7 @@ class WebWeixin(object):
         url = 'https://' + self.syncHost + '/cgi-bin/mmwebwx-bin/synccheck?' + urllib.parse.urlencode(params)
         data = self._get(url, timeout=5)
         if data == '':
-            return [-1,-1]
+            return [-1, -1]
 
         pm = re.search(
             r'window.synccheck={retcode:"(\d+)",selector:"(\d+)"}', data)
@@ -925,7 +926,10 @@ class WebWeixin(object):
                         if result[1] == 1:
                             self.sendMsg2Group(msg['FromUserName'], srcName + "撤回了-->" + result[0])
                         if result[1] == 3:
-                            pass
+                            dirName = os.path.join(self.saveFolder, self.saveSubFolders['webwxgetmsgimg'])
+                            filename = "img_"+revokemsg_id+".jpg"
+                            fn = os.path.join(dirName, filename)
+                            self.sendImg2Group(msg['FromUserName'], fn)
                     else:
                         print("msg")
             else:
@@ -1042,6 +1046,13 @@ class WebWeixin(object):
             media_id = response['MediaId']
         user_id = self.getUSerID(name)
         response = self.webwxsendmsgimg(user_id, media_id)
+
+    def sendImg2Group(self, group_id, file_name):
+        response = self.webwxuploadmedia(file_name)
+        media_id = ""
+        if response is not None:
+            media_id = response['MediaId']
+        response = self.webwxsendmsgimg(group_id, media_id)
 
     def sendEmotion(self, name, file_name):
         response = self.webwxuploadmedia(file_name)
