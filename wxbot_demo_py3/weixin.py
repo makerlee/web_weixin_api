@@ -29,6 +29,8 @@ from socket import timeout as timeout_error
 # for media upload
 import mimetypes
 # from requests_toolbelt.multipart.encoder import MultipartEncoder
+from wxbot_demo_py3.save_message import MysqlDao
+
 
 def catchKeyboardInterrupt(fn):
     def wrapper(*args):
@@ -86,7 +88,7 @@ class WebWeixin(object):
 
     def __init__(self):
         self.DEBUG = False
-        self.commandLineQRCode = False
+        self.commandLineQRCode = False  # 在console显示二维码开关
         self.uuid = ''
         self.base_uri = ''
         self.redirect_uri = ''
@@ -170,7 +172,7 @@ class WebWeixin(object):
         else:
             self._str2qr('https://login.weixin.qq.com/l/' + self.uuid)
 
-    # 显示登录二维码
+    # 显示登录二维码(分两种情况: "在命令行显示"；"保存到文件")
     def _showQRCodeImg(self, str):
         if self.commandLineQRCode:
             qrCode = QRCode('https://login.weixin.qq.com/l/' + self.uuid)
@@ -709,6 +711,7 @@ class WebWeixin(object):
         dstName = None
         groupName = None
         content = None
+        msgtype = message['raw_msg']['MsgType']
 
         msg = message
         logging.debug(msg)
@@ -716,8 +719,7 @@ class WebWeixin(object):
         if msg['raw_msg']:
             srcName = self.getUserRemarkName(msg['raw_msg']['FromUserName'])
             dstName = self.getUserRemarkName(msg['raw_msg']['ToUserName'])
-            content = msg['raw_msg']['Content'].replace(
-                '&lt;', '<').replace('&gt;', '>')
+            content = msg['raw_msg']['Content'].replace('&lt;', '<').replace('&gt;', '>')
             message_id = msg['raw_msg']['MsgId']
 
             # 地理位置消息
@@ -739,6 +741,7 @@ class WebWeixin(object):
 
                 content = '%s 发送了一个 位置消息 - 我在 [%s](%s) @ %s]' % (
                     srcName, pos, url, loc)
+
 
             # 文件传输助手
             if msg['raw_msg']['ToUserName'] == 'filehelper':
@@ -784,11 +787,12 @@ class WebWeixin(object):
 
         msg = content.replace('<br/>', '\n')  # 正则去除无用符号
 
-        sql = 'INSERT INTO wx_message (sender, groupName, message, receive_time) VALUES (%s, %s, %s, %s)'
+
+        sql = 'INSERT INTO wx_message (msgid, sender, groupName, message, msgType,receive_time) VALUES (%s, %s, %s, %s, %s, %s)'
         if groupName is None:
-            cursor.execute(sql, (srcName.strip(), '', msg, datetime.datetime.now()))
+            cursor.execute(sql, (message_id, srcName.strip(), '', msg, msgtype, datetime.datetime.now()))
         else:
-            cursor.execute(sql, (srcName.strip(), groupName.strip(), msg, datetime.datetime.now()))
+            cursor.execute(sql, (message_id, srcName.strip(), groupName.strip(), msg, msgtype, datetime.datetime.now()))
 
         dao.conn.commit()
         cursor.close()
@@ -812,13 +816,14 @@ class WebWeixin(object):
             content = msg['Content'].replace('&lt;', '<').replace('&gt;', '>')
             msgid = msg['MsgId']
 
+            print(content)
+
             if msgType == 1:
                 raw_msg = {'raw_msg': msg}
                 self._showMsg(raw_msg)
-# 自己加的代码-------------------------------------------#
-                # if self.autoReplyRevokeMode:
-                #    store
-# 自己加的代码-------------------------------------------#
+                # 自己加的代码-------------------------------------------#
+
+                # 自己加的代码-------------------------------------------#
                 # todo 如果开启自动回复,则进行自定义回复
                 if self.autoReplyMode:
                     ans = '\n[李继阳的机器人自动回复]'
@@ -887,9 +892,42 @@ class WebWeixin(object):
                            'message': '%s 发了一段小视频: %s' % (name, video)}
                 self._showMsg(raw_msg)
                 self._safe_open(video)
+
+            #
             elif msgType == 10002:
                 raw_msg = {'raw_msg': msg, 'message': '%s 撤回了一条消息' % name}
                 self._showMsg(raw_msg)
+
+                #  todo 群聊下，当有人撤回消息时，保留并转发到此群
+                if msg['FromUserName'][:2] == '@@':
+                    if ":<br/>" in content:
+                        [people, content] = content.split(':<br/>', 1)
+                        srcName = self.getUserRemarkName(people)
+                    else:
+                        srcName = 'SYSTEM'
+
+                    doc = xml.dom.minidom.parseString(content)
+                    root = doc.documentElement
+                    revokemsg_id = root.getElementsByTagName("msgid")[0].firstChild.data
+
+                    dao = MysqlDao()
+                    dao.openConn()
+                    cursor = dao.conn.cursor()
+                    sql = 'SELECT message,msgType FROM wx_message WHERE msgid=%s'
+                    cursor.execute(sql, revokemsg_id)
+                    result = cursor.fetchone()
+                    dao.conn.commit()
+                    cursor.close()
+                    dao.closeConn()
+
+                    print(srcName + "撤回了-->"+result[0])
+                    if result[1] is not None:
+                        if result[1] == 1:
+                            self.sendMsg2Group(msg['FromUserName'], srcName + "撤回了-->" + result[0])
+                        if result[1] == 3:
+                            pass
+                    else:
+                        print("msg")
             else:
                 logging.debug('[*] 该消息类型为: %d，可能是表情，图片, 链接或红包: %s' %
                               (msg['MsgType'], json.dumps(msg)))
@@ -936,6 +974,30 @@ class WebWeixin(object):
                     time.sleep(1)
             if (time.time() - self.lastCheckTs) <= 20:
                 time.sleep(time.time() - self.lastCheckTs)
+
+    def sendMsg2Group(self, id, word, isfile=False):
+        if id:
+            if isfile:
+                name = ''
+                with open(word, 'r') as f:
+                    for line in f.readlines():
+                        line = line.replace('\n', '')
+                        self._echo('-> ' + name + ': ' + line)
+                        if self.webwxsendmsg(line, id):
+                            print(' [成功]')
+                        else:
+                            print(' [失败]')
+                        time.sleep(1)
+            else:
+                if self.webwxsendmsg(word, id):
+                    print('[*] 消息发送成功')
+                    logging.debug('[*] 消息发送成功')
+                else:
+                    print('[*] 消息发送失败')
+                    logging.debug('[*] 消息发送失败')
+        else:
+            print('[*] 此群ID不存在')
+            logging.debug('[*] 此群ID不存在')
 
     def sendMsg(self, name, word, isfile=False):
         id = self.getUSerID(name)
@@ -1001,6 +1063,7 @@ class WebWeixin(object):
             logging.debug('[*] wechat for web ... starting')
             self.genQRCode()
             print('[*] 请使用微信扫描二维码以登录 ... ')
+            # 轮询获取登录结果
             if not self.waitForLogin():
                 continue
                 print('[*] 请在手机上点击确认以登录 ... ')
