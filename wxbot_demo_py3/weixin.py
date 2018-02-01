@@ -19,6 +19,7 @@ import random
 import multiprocessing
 import platform
 import logging
+import hashlib
 import http.client
 from collections import defaultdict
 from urllib.parse import urlparse
@@ -31,6 +32,10 @@ import mimetypes
 # from requests_toolbelt.multipart.encoder import MultipartEncoder
 from requests_toolbelt import *
 from wxbot_demo_py3.save_message import MysqlDao
+
+from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageFont
 
 
 def catchKeyboardInterrupt(fn):
@@ -467,8 +472,13 @@ class WebWeixin(object):
         dic = r.json()
         return dic['BaseResponse']['Ret'] == 0
 
-    def webwxuploadmedia(self, image_name):
-        url = 'https://file2.wx.qq.com/cgi-bin/mmwebwx-bin/webwxuploadmedia?f=json'
+    def webwxuploadmedia(self, image_name, self_id=None, group_id=None):
+        if not os.path.exists(image_name):
+            print("[Error] 文件不存在")
+            return None
+        url = 'https://file.wx2.qq.com/cgi-bin/mmwebwx-bin/webwxuploadmedia?f=json'
+        get_result = requests.get(url).json()
+
         # 计数器
         self.media_count = self.media_count + 1
         # 文件名
@@ -483,6 +493,10 @@ class WebWeixin(object):
         lastModifieDate = 'Thu Mar 17 2016 00:55:10 GMT+0800 (CST)'
         # 文件大小
         file_size = os.path.getsize(file_name)
+        # 文件MD5
+        md5file = open(file_name, 'rb')
+        md5 = hashlib.md5(md5file.read()).hexdigest()
+
         # PassTicket
         pass_ticket = self.pass_ticket
         # clientMediaId
@@ -498,6 +512,10 @@ class WebWeixin(object):
             return "None Fuck Cookie"
 
         uploadmediarequest = json.dumps({
+            "UploadType": 2,  # lijiyang add at 18-02-01
+            "FromUserName": self_id,  # id
+            "ToUserName": group_id,  # id
+            "FileMd5": md5,  # 文件的MD5
             "BaseRequest": self.BaseRequest,
             "ClientMediaId": client_media_id,
             "TotalLen": file_size,
@@ -509,7 +527,7 @@ class WebWeixin(object):
         multipart_encoder = MultipartEncoder(
             fields={
                 'id': 'WU_FILE_' + str(self.media_count),
-                'name': file_name,
+                'name': "a1.jpg",
                 'type': mime_type,
                 'lastModifieDate': lastModifieDate,
                 'size': str(file_size),
@@ -517,15 +535,15 @@ class WebWeixin(object):
                 'uploadmediarequest': uploadmediarequest,
                 'webwx_data_ticket': webwx_data_ticket,
                 'pass_ticket': pass_ticket,
-                'filename': (file_name, open(file_name, 'rb'), mime_type.split('/')[1])
+                'filename': ("a1.jpg", open(file_name, 'rb'), mime_type.split('/')[1])
             },
             boundary='-----------------------------1575017231431605357584454111'
         )
 
         headers = {
-            'Host': 'file2.wx.qq.com',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.10; rv:42.0) Gecko/20100101 Firefox/42.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Host': 'file.wx2.qq.com',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36',
+            'Accept': '*/*',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate',
             'Referer': 'https://wx2.qq.com/',
@@ -541,6 +559,7 @@ class WebWeixin(object):
         if response_json['BaseResponse']['Ret'] == 0:
             return response_json
         return None
+
 
     def webwxsendmsgimg(self, user_id, media_id):
         url = 'https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxsendmsgimg?fun=async&f=json&pass_ticket=%s' % self.pass_ticket
@@ -817,8 +836,6 @@ class WebWeixin(object):
             content = msg['Content'].replace('&lt;', '<').replace('&gt;', '>')
             msgid = msg['MsgId']
 
-            print(content)
-
             if msgType == 1:
                 raw_msg = {'raw_msg': msg}
                 self._showMsg(raw_msg)
@@ -921,15 +938,19 @@ class WebWeixin(object):
                     cursor.close()
                     dao.closeConn()
 
-                    print(srcName + "撤回了-->"+result[0])
                     if result[1] is not None:
                         if result[1] == 1:
-                            self.sendMsg2Group(msg['FromUserName'], srcName + "撤回了-->" + result[0])
+                            self.sendMsg2Group(msg['FromUserName'], srcName + "撤回了->[" + result[0] + "]")
                         if result[1] == 3:
+                            self.sendMsg2Group(msg['FromUserName'], srcName + "撤回了一张图片")
                             dirName = os.path.join(self.saveFolder, self.saveSubFolders['webwxgetmsgimg'])
                             filename = "img_"+revokemsg_id+".jpg"
                             fn = os.path.join(dirName, filename)
-                            self.sendImg2Group(msg['FromUserName'], fn)
+
+                            # PIL set water mark
+                            self.set_watermark(fn, srcName+"撤回的图片"+datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                            # resend image to group with my account
+                            self.sendImg2Group(self.User['UserName'], msg['FromUserName'], os.path.join(dirName, "revoke", filename))
                     else:
                         print("msg")
             else:
@@ -1047,8 +1068,8 @@ class WebWeixin(object):
         user_id = self.getUSerID(name)
         response = self.webwxsendmsgimg(user_id, media_id)
 
-    def sendImg2Group(self, group_id, file_name):
-        response = self.webwxuploadmedia(file_name)
+    def sendImg2Group(self, self_id, group_id, file_name):
+        response = self.webwxuploadmedia(file_name, self_id, group_id)
         media_id = ""
         if response is not None:
             media_id = response['MediaId']
@@ -1061,6 +1082,28 @@ class WebWeixin(object):
             media_id = response['MediaId']
         user_id = self.getUSerID(name)
         response = self.webwxsendmsgemotion(user_id, media_id)
+
+    # 给图片添加水印
+    def set_watermark(self, image_file, text):
+        img = Image.open(image_file)
+        (img_x, img_y) = img.size
+        basename = os.path.basename(image_file)
+
+        # 文字字体大小根据图片分辨率动态调整 图片分辨率过小的情况下依然会导致水印显示不完整
+        fontSize = 1
+        ttfont = ImageFont.truetype("yahei.ttf", fontSize, encoding='unic')
+        while ttfont.getsize(text)[0] < 0.3 * img_x:
+            fontSize = fontSize + 1
+            font = ImageFont.truetype("yahei.ttf", fontSize, encoding='unic')
+
+        draw = ImageDraw.Draw(img)
+        draw.text((int(img_x / 5), 0), text, (100, 100, 0), font=font)
+
+        newdir = os.path.join("saved", "msgimgs", "revoke")
+        if not os.path.exists(newdir):
+            os.mkdir(newdir)
+
+        img.save(newdir + '/' + basename, 'jpeg')
 
     @catchKeyboardInterrupt
     def start(self):
