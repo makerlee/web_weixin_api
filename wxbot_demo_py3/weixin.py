@@ -1091,8 +1091,8 @@ class WebWeixin(object):
 
         # 文字字体大小根据图片分辨率动态调整 图片分辨率过小的情况下依然会导致水印显示不完整
         fontSize = 1
-        ttfont = ImageFont.truetype("yahei.ttf", fontSize, encoding='unic')
-        while ttfont.getsize(text)[0] < 0.3 * img_x:
+        font = ImageFont.truetype("yahei.ttf", fontSize, encoding='unic')
+        while font.getsize(text)[0] < 0.3 * img_x:
             fontSize = fontSize + 1
             font = ImageFont.truetype("yahei.ttf", fontSize, encoding='unic')
 
